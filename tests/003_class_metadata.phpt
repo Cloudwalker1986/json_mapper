@@ -18,17 +18,16 @@ $schema = json_schema_for_object(MetadataOnly::class);
 $properties = $schema['properties'];
 var_dump($schema['class']);
 var_dump(MetadataOnly::$constructed);
-var_dump($properties['defaulted']['has_default']);
+var_dump($properties['defaulted']['field'], $properties['defaulted']['type']);
 var_dump(array_key_exists('value', $properties['defaulted']));
 var_dump(array_key_exists('initialized', $properties['defaulted']));
-var_dump($properties['withoutDefault']['has_default']);
 var_dump(array_key_exists('value', $properties['withoutDefault']));
 ?>
 --EXPECT--
 string(12) "MetadataOnly"
 int(0)
-bool(true)
-bool(false)
+string(9) "defaulted"
+string(3) "int"
 bool(false)
 bool(false)
 bool(false)

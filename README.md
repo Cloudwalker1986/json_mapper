@@ -76,7 +76,7 @@ PHP-FPM and Apache may use separate `.ini` directories; enable the extension for
 json_schema_for_object(object|string $object): array;
 ```
 
-The function accepts either an object or a class name. It returns this extension's metadata format; it is not the JSON Schema standard. Static and dynamic properties are excluded.
+The function accepts either an object or a class name. It returns the extension's schema metadata; it is not the JSON Schema standard. `properties` is keyed by each PHP property name, and each entry's `field` contains the JSON field name. Static and dynamic properties are excluded.
 
 ```php
 use JsonMapper\Attributes\JsonField;
@@ -96,28 +96,37 @@ $schema = json_schema_for_object(new User());
 var_dump($schema['properties']['firstName']);
 ```
 
-A property entry includes its PHP name, JSON name, declared type, visibility, and whether it has a declared default. Public properties with standard Zend object storage also include `value` and `initialized` when an instance is supplied:
+A property entry includes `field`, `description`, `required`, `item_types`, and the declared PHP `type`. Public properties with standard Zend object storage also include `value` and `initialized` when an instance is supplied:
 
 ```php
 [
-    'php_name' => 'firstName',
-    'json_name' => 'first_name',
+    'field' => 'first_name',
     'description' => 'Given name',
     'required' => true,
     'item_types' => [],
     'type' => 'string',
-    'visibility' => 'public',
-    'has_default' => true,
     'value' => 'John',
     'initialized' => true,
 ]
 ```
 
-Every property entry includes `description` and `required`. Without `JsonField`, the description is `null` and required is `false`. An uninitialized public property has `value => null` and `initialized => false`; an initialized nullable property containing `null` has `initialized => true`. `has_default` reflects the class declaration, not the property's current value.
+The map key is the original PHP property name; the `field` value is the JSON name, which defaults to the PHP name. Without `JsonField`, the description is `null` and required is `false`. An uninitialized public property has `value => null` and `initialized => false`; an initialized nullable property containing `null` has `initialized => true`. Runtime fields appear only for public properties on standard object storage.
+
+Visibility and declared-default flags are not part of this compact schema entry. Private and protected properties are still listed, but their runtime values and initialization state are omitted. When parent and child declarations share a PHP property name, the child declaration is used.
 
 With a class name, the function returns class and property metadata without constructing an object. It omits `value` and `initialized`, because runtime state is unavailable. Looking up an unloaded class follows PHP's normal autoloading behavior, but does not call its constructor.
 
-Inherited properties are included. Overridden public or protected properties are represented by the child declaration. Private properties with duplicate names are keyed as `DeclaringClass::$property`; their `php_name` field remains the unqualified PHP property name.
+Inherited properties are included. If a child declares a property with the same PHP name as an inherited property, the child declaration is used. Private properties also use their unqualified PHP name as the map key; therefore, a child private property with the same name takes precedence over the parent's private property.
+
+The `JsonMapper\JsonSchema` class provides an OOP entry point to the same native schema builder:
+
+```php
+use JsonMapper\JsonSchema;
+
+$schema = (new JsonSchema(User::class))->draw();
+```
+
+Its constructor accepts an object or class name. Each `draw()` call returns the same shape as `json_schema_for_object()`.
 
 ## `JsonField` attribute
 
@@ -166,7 +175,7 @@ class Order
 }
 ```
 
-A property typed as `Product` reports `Product` as its `type`; nested properties are not traversed. `JsonCollectionValue(Product::class)` declares that the array or custom collection contains `Product` instances. It contributes a single entry to `item_types`, the same schema key used by `JsonField(itemTypes: [...])`. Do not combine it with a non-empty `JsonField(itemTypes)` list; schema inspection reports an error if both are specified.
+A property typed as `Product` reports `Product` as its `type`; nested properties are not traversed yet. `JsonCollectionValue(Product::class)` declares that the array or custom collection contains `Product` instances. It contributes a single entry to `item_types`, the same schema key used by `JsonField(itemTypes: [...])`. Do not combine it with a non-empty `JsonField(itemTypes)` list; schema inspection reports an error if both are specified.
 
 The native attribute has this shape:
 
@@ -182,16 +191,16 @@ The declared property `type` identifies the collection itself (`ProductCollectio
 
 Every user-declared property typed as `array` must provide at least one item class through `JsonField(itemTypes: [...])` or `JsonCollectionValue(...)`. This also applies to nullable arrays and union types that include `array`. Schema inspection throws `Error` if such a property has no item class. Internal PHP classes are exempt because their property declarations cannot be amended with these attributes. A property declared `mixed` is not treated as an array declaration, even when its current value happens to be an array.
 
-The attribute preserves the PHP property name and returns the mapped name in `json_name`, alongside `description`, `required`, and `item_types`.
+The attribute preserves the PHP property name as the `properties` map key and returns the mapped name in `field`, alongside `description`, `required`, and `item_types`.
 
 ## Current limitations
 
 - Runtime values are inspected only for public properties on objects using standard Zend object storage. The extension reads the property slot directly, so it does not invoke magic getters or setters. PHP 8.4+ virtual properties are metadata-only because they have no stored slot to inspect safely.
-- Private and protected properties are included as metadata only. Their runtime values and initialization state are omitted.
+- Private and protected properties are included in schema metadata. Their runtime values and initialization state are omitted.
 - Objects with custom property handlers, including some internal classes and proxies, receive metadata only because safely reading their values could invoke custom behavior.
 - Class-string input has no runtime values. Unloaded class names may run an autoloader as part of PHP's normal class lookup.
 - Dynamic and static properties are ignored. Nested object values are returned as zval copies; they are not recursively traversed or JSON encoded.
-- Duplicate JSON field names are not checked. `json_name` is a mapping label, not a claim that the metadata is valid JSON Schema.
+- Duplicate JSON field names are not checked. `field` is a mapping label, not a claim that the metadata is valid JSON Schema.
 - `item_types` is declarative metadata only. The annotated property's collection behavior and runtime contents are not checked, and class-name strings are not resolved or autoloaded during schema inspection.
 - Encoding, decoding, constructor hydration, readonly handling, and deserialization security policies are not implemented.
 
@@ -225,7 +234,7 @@ Extension symbols are built with debug information. PHP's own internals may need
 
 ## Roadmap
 
-1. **Schema inspection:** native property metadata, initialization and default state, inheritance, `JsonField` mapping, and collection element type declarations. The PHPT suite runs on PHP 8.3, 8.4, and 8.5; the virtual-property case runs on 8.4 and newer.
+1. **Schema inspection:** native property metadata, public runtime value and initialization state, inheritance, `JsonField` mapping, and collection element type declarations. Properties are keyed by PHP name and expose the mapped JSON name as `field`. The PHPT suite runs on PHP 8.3, 8.4, and 8.5; the virtual-property case runs on 8.4 and newer.
 2. **Encoding:** `json_encode_object(object $object): string`, with a documented policy for uninitialized properties.
 3. **Decoding:** `json_decode_object(string $json, string $className): object`, with typed assignment errors and an explicit construction policy.
 4. **Advanced mapping:** ignored/type attributes, nested object traversal, collection content validation, and heterogeneous item class selection.

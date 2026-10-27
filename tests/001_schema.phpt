@@ -1,5 +1,5 @@
 --TEST--
-Schema reports declared property names, types, defaults, values, and initialization
+Schema reports property fields, types, values, and initialization
 --SKIPIF--
 <?php if (!extension_loaded('json_mapper')) echo 'skip json_mapper not loaded'; ?>
 --FILE--
@@ -13,13 +13,11 @@ class SchemaBasic {
 
 $properties = json_schema_for_object(new SchemaBasic())['properties'];
 var_dump(array_keys($properties));
-var_dump($properties['id']['php_name'], $properties['id']['type']);
-var_dump($properties['id']['visibility'], $properties['id']['has_default']);
+var_dump($properties['id']['field'], $properties['id']['type']);
 var_dump($properties['id']['description'], $properties['id']['required']);
 var_dump($properties['id']['initialized'], $properties['id']['value']);
-var_dump($properties['name']['type'], $properties['name']['has_default']);
+var_dump($properties['name']['type']);
 var_dump($properties['name']['initialized'], $properties['name']['value']);
-var_dump($properties['unset']['has_default']);
 var_dump($properties['unset']['initialized'], $properties['unset']['value']);
 ?>
 --EXPECT--
@@ -33,16 +31,12 @@ array(3) {
 }
 string(2) "id"
 string(3) "int"
-string(6) "public"
-bool(true)
 NULL
 bool(false)
 bool(true)
 int(42)
 string(7) "?string"
 bool(true)
-bool(true)
 NULL
-bool(false)
 bool(false)
 NULL
