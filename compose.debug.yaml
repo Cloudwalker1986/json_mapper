@@ -1,0 +1,8 @@
+# Opt-in local-only native debugging permissions:
+# docker compose -f compose.yaml -f compose.debug.yaml up -d
+services:
+  php:
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined

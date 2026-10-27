@@ -1,0 +1,16 @@
+name: PHP 8.4 tests
+on:
+  push:
+
+jobs:
+  test:
+    name: Build and test PHP 8.4
+    runs-on: ubuntu-latest
+    env:
+      PHP_VERSION: '8.4'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker compose build php
+      - name: Compile and run PHPT tests
+        run: docker compose run --rm -T php bash -lc './scripts/build.sh && ./scripts/test.sh'
