@@ -5,10 +5,10 @@ This guide explains how `src/json_mapper.c` implements `json_schema_for_object()
 ## The whole call in five steps
 
 1. PHP loads the extension and the module startup function registers the native `JsonField` and `JsonCollectionValue` classes.
-2. PHP code calls `json_schema_for_object($objectOrClassName)`.
+2. PHP code calls `json_schema_for_object($objectOrClassName)` or `(new JsonMapper\JsonSchema($objectOrClassName))->draw()`.
 3. The extension finds the class's declared properties, including declarations in parent classes.
 4. For each property, it builds metadata and reads a runtime value only when that is safe.
-5. It returns a PHP array containing the class name and the property map.
+5. It returns a PHP array containing the class name and a property map keyed by PHP property name.
 
 For example:
 
@@ -24,7 +24,7 @@ class User
 $schema = json_schema_for_object(new User());
 ```
 
-The entry for `firstName` includes `php_name`, `json_name`, `description`, `required`, `item_types`, `type`, `visibility`, and `has_default`. Since an object was passed, it also includes `value` and `initialized` for this public property when it has standard, non-virtual storage.
+The entry for `firstName` includes `field`, `description`, `required`, `item_types`, and `type`. Since an object was passed, it also includes `value` and `initialized` for this public property when it has standard, non-virtual storage.
 
 If a user-declared property type includes `array`, its `item_types` list must not be empty. `JsonField(itemTypes: [...])` or `JsonCollectionValue(...)` supplies that metadata before the property entry is created.
 
@@ -90,39 +90,28 @@ This helper merges a `JsonCollectionValue` class name into the schema's `item_ty
 
 The helper releases the old empty list, creates a new list, and uses `add_next_index_str()` to transfer ownership of the copied class-name string into it.
 
-## `property_has_default`
-
-This helper answers whether the property declaration has a default value. It does not inspect the current object value.
-
-Zend stores each class's declared defaults in `default_properties_table`. A property info record contains an offset into the object's property storage. `OBJ_PROP_TO_NUM()` converts the offset to a table index. If the indexed default is `IS_UNDEF`, there was no declared default; a default of `null` is still a default because its value is `IS_NULL`.
-
-On PHP versions with virtual properties, the helper returns `false` for those properties because a virtual property has no stored default slot.
-
 ## `property_type_contains_array`
 
 This helper checks the Zend type mask for an explicit array type. It returns true for user-declared `array`, nullable array types, and union types that include array. It returns false for untyped and `mixed` properties; `mixed` can contain an array at runtime but does not declare a collection type. Internal PHP classes are also exempt because userland cannot add these attributes to their property declarations.
 
 The `MAY_BE_ANY` check distinguishes `mixed` from an explicit `array` bit. This is why the extension does not require `item_types` just because a `mixed` property's current value happens to be an array.
 
-## `property_visibility` and `property_schema_key`
+## Property map key
 
-`property_visibility()` checks the visibility flags on `zend_property_info` and returns the text `private`, `protected`, or `public`.
-
-`property_schema_key()` chooses the key used in the returned `properties` map. Public and protected properties use their PHP property name. Private properties can share a name with a private property in a parent class, so their keys include the declaring class, such as `User::$secret`. The entry's `php_name` remains just `secret`.
+The returned `properties` map uses the unmangled PHP property name for every visibility. If a child declaration has a property with the same PHP name as an inherited declaration, the child declaration is kept and the parent declaration is skipped. This ensures private property keys stay plain PHP names, with one deterministic entry for duplicate names.
 
 ## `add_property_schema`
 
 This helper creates one property entry and places it in the `properties` array.
 
-First, it creates the schema key. If a child declaration has already added the same public or protected property, the parent declaration is skipped so an overridden property appears only once. Private properties use class-qualified keys and can coexist.
+First, it creates the key from the PHP property name. If a child declaration has already added a property with that name, the parent declaration is skipped, regardless of visibility.
 
 Next, the helper calls `json_field_attribute_values()` to get the field name, description, required flag, and item type list. It then creates a PHP array and adds:
 
-- `php_name` and `json_name`;
+- `field`, containing the mapped JSON field name;
 - `description` and `required`;
 - `item_types`, copied from the attribute or an empty array;
 - the declared type, or `mixed` when the property has no declared type;
-- visibility and `has_default`.
 
 Before creating the entry, it calls `add_collection_value_to_item_types()` so a `JsonCollectionValue` attribute is represented by a one-element `item_types` list.
 
@@ -136,13 +125,15 @@ If the slot is `IS_UNDEF`, the entry gets `value => null` and `initialized => fa
 
 Finally, `zend_hash_update()` inserts the completed entry under its schema key. The temporary key string is released after insertion.
 
-## `json_schema_for_object`
+## `json_mapper_build_schema`, `json_schema_for_object`, and `JsonMapper\JsonSchema`
 
-This is the public PHP function implemented in C. `arginfo_schema` declares its parameter as `object|string`, and `Z_PARAM_OBJ_OR_STR()` parses either form.
+`json_mapper_build_schema()` is the shared internal implementation. It accepts either a `zend_object` or a class-name `zend_string`, creates the output array, and adds class metadata and the property map. Both public APIs call this helper.
+
+`json_schema_for_object()` is the procedural entry point. `arginfo_schema` declares its parameter as `object|string`, and `Z_PARAM_OBJ_OR_STR()` parses either form before calling the shared helper.
 
 If the argument is an object, the function reads its class entry from the runtime object. If the argument is a string, `zend_lookup_class()` finds the class entry. Normal PHP autoloading may occur during this lookup, but the extension does not instantiate the class or call its constructor.
 
-The function creates the return array, adds the class name, and creates a separate `properties` array. It walks the class and each parent class. For each scope, it:
+The helper creates the return array, adds the class name, and creates a separate `properties` array. It walks the class and each parent class. For each scope, it:
 
 1. Skips static properties.
 2. Skips inherited copies whose declaring class is a different scope. The parent scope will handle those declarations, preventing duplicates.
@@ -154,11 +145,13 @@ If a property has invalid attribute data, `add_property_schema()` returns `false
 
 When given a class name, the object pointer is `NULL`. As a result, the function returns property metadata but omits `value` and `initialized` because no runtime property state exists.
 
+`JsonMapper\JsonSchema` is a final internal class registered during module startup. Its constructor stores an object or class-name string in a private `target` property. `draw()` reads that declared property and calls the same builder. It does not duplicate the schema logic or cache the result; each call draws the target's current schema.
+
 ## Function table and module startup
 
 `json_mapper_functions` registers `json_schema_for_object()` as a global PHP function and ends with `PHP_FE_END`.
 
-`PHP_MINIT_FUNCTION(json_mapper)` runs when PHP starts the extension and calls `json_mapper_register_attributes()` from `json_mapper_attributes.c`. That helper registers both native classes and their typed properties, defaults, methods, and property-only attribute target.
+`PHP_MINIT_FUNCTION(json_mapper)` runs when PHP starts the extension, calls `json_mapper_register_attributes()` from `json_mapper_attributes.c`, and registers the native `JsonMapper\JsonSchema` class and methods.
 
 `PHP_MINFO_FUNCTION(json_mapper)` supplies the small status table shown by `phpinfo()`.
 
@@ -180,4 +173,4 @@ When changing this source, check both the success path and every `goto failure` 
 
 ## Scope of this file
 
-`json_mapper.c` only inspects schema metadata. It requires item metadata for explicitly array-typed properties, but it does not validate collection contents or the declared property's collection behavior, load the named classes, encode or decode JSON, traverse nested objects, include dynamic or static properties, or read private/protected runtime values. A heterogeneous list also does not tell a future decoder which class to instantiate for each JSON item; that requires a discriminator or another selection policy. The README describes these limits and the complete returned array shape.
+`json_mapper.c` only inspects the direct schema metadata for the requested class. It requires item metadata for explicitly array-typed properties, but it does not validate collection contents or the declared property's collection behavior, load the named classes, encode or decode JSON, traverse nested object properties, include dynamic or static properties, or read private/protected runtime values. A heterogeneous list also does not tell a future decoder which class to instantiate for each JSON item; that requires a discriminator or another selection policy. The README describes these limits and the complete returned array shape.

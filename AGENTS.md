@@ -24,14 +24,15 @@ The current milestone implements:
 - Native `JsonMapper\Attributes\JsonCollectionValue`, targeted to properties, with required `className` for one homogeneous collection item type
 - Attribute class registration and constructors live in `src/json_mapper_attributes.c`; schema inspection and raw attribute argument parsing live in `src/json_mapper.c`
 - Declared, non-static property metadata, including inherited and overridden properties
-- PHP and JSON property names, description, required state, collection `item_types` from either collection metadata attribute, Zend-rendered type, visibility, and `has_default`
+- Property entries keyed by PHP property name, with mapped JSON name in `field`, plus description, required state, collection `item_types`, and Zend-rendered type
 - User-declared array, nullable-array, and union properties containing `array` require at least one declared item class; `mixed` properties and internal PHP class properties are exempt
 - Runtime `value` and `initialized` for public properties on objects with standard Zend property storage
+- Native `JsonMapper\JsonSchema` class with `draw(): array`, using the same schema builder as the procedural function
 - Metadata-only inspection for class-name input; no object is constructed
 
-Private and protected properties are reported as metadata only. Public values are read directly from standard object storage, without magic getters or setters. Runtime fields are omitted for non-public properties, custom object handlers, and class-name input. Uninitialized public properties have `value => null` and `initialized => false`; explicit `null` has `initialized => true`. Static and dynamic properties are ignored. See `README.md` for the output shape and limitations.
+Private and protected properties are included in schema metadata but have no runtime fields. The `properties` map uses unqualified PHP property names; child declarations take precedence for duplicate names. Public values are read directly from standard object storage, without magic getters or setters. Runtime fields are omitted for custom object handlers and class-name input. Uninitialized public properties have `value => null` and `initialized => false`; explicit `null` has `initialized => true`. Static and dynamic properties are ignored. See `README.md` for the output shape and limitations.
 
-The 16-test PHPT suite covers schema basics, `JsonField` mapping and metadata defaults, `JsonCollectionValue`, homogeneous and heterogeneous collection item types, required array item declarations, nullable and uninitialized properties, default state, inheritance, empty classes, invalid attribute arguments, union/intersection types, magic-access safety, repeated inspection, and PHP 8.4+ virtual properties. The virtual-property case is skipped on PHP 8.3. Run the suite inside Docker after C changes.
+The 18-test PHPT suite covers schema basics and output shape, `JsonField` mapping, `JsonCollectionValue`, homogeneous and heterogeneous collection item types, required array item declarations, nullable and uninitialized properties, inheritance and duplicate property names, empty classes, invalid attribute arguments, union/intersection types, magic-access safety, repeated inspection, the OOP wrapper, and PHP 8.4+ virtual properties. The virtual-property case is skipped on PHP 8.3. Run the suite inside Docker after C changes.
 
 ## Next milestones
 

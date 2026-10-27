@@ -14,6 +14,8 @@
 #define JSON_FIELD_ATTRIBUTE "jsonmapper\\attributes\\jsonfield"
 #define JSON_COLLECTION_VALUE_ATTRIBUTE "jsonmapper\\attributes\\jsoncollectionvalue"
 
+static zend_class_entry *json_schema_ce;
+
 static zend_string *property_name(zend_property_info *prop)
 {
     const char *class_name;
@@ -273,28 +275,6 @@ static bool add_collection_value_to_item_types(zend_property_info *prop, zval *i
     return true;
 }
 
-static bool property_has_default(zend_class_entry *ce, zend_property_info *prop)
-{
-    uint32_t property_num;
-
-#ifdef ZEND_ACC_VIRTUAL
-    if (prop->flags & ZEND_ACC_VIRTUAL) {
-        return false;
-    }
-#endif
-
-    if (!ce->default_properties_table || prop->offset < OBJ_PROP_TO_OFFSET(0)) {
-        return false;
-    }
-
-    property_num = OBJ_PROP_TO_NUM(prop->offset);
-    if (property_num >= ce->default_properties_count) {
-        return false;
-    }
-
-    return Z_TYPE(ce->default_properties_table[property_num]) != IS_UNDEF;
-}
-
 static bool property_type_contains_array(zend_property_info *prop)
 {
     const zend_type *type_component;
@@ -320,29 +300,8 @@ static bool property_type_contains_array(zend_property_info *prop)
     return false;
 }
 
-static const char *property_visibility(zend_property_info *prop)
-{
-    if (prop->flags & ZEND_ACC_PRIVATE) {
-        return "private";
-    }
-    if (prop->flags & ZEND_ACC_PROTECTED) {
-        return "protected";
-    }
-    return "public";
-}
-
-static zend_string *property_schema_key(zend_property_info *prop, zend_string *php_name)
-{
-    if (prop->flags & ZEND_ACC_PRIVATE) {
-        return strpprintf(0, "%s::$%s", ZSTR_VAL(prop->ce->name), ZSTR_VAL(php_name));
-    }
-
-    return zend_string_copy(php_name);
-}
-
 static bool add_property_schema(
     zval *properties,
-    zend_class_entry *ce,
     zend_property_info *prop,
     zend_string *php_name,
     zend_object *object
@@ -352,16 +311,14 @@ static bool add_property_schema(
     zend_string *field_name;
     zend_string *schema_key;
     zend_string *type_name;
-    const char *visibility;
     zval description;
     bool required;
     zval item_types;
 
-    schema_key = property_schema_key(prop, php_name);
+    schema_key = zend_string_copy(php_name);
 
-    /* A child declaration shadows the same public or protected parent property. */
-    if (!(prop->flags & ZEND_ACC_PRIVATE)
-        && zend_hash_exists(Z_ARRVAL_P(properties), schema_key)) {
+    /* The map is keyed by PHP property name, so a child declaration wins any same-named parent property. */
+    if (zend_hash_exists(Z_ARRVAL_P(properties), schema_key)) {
         zend_string_release(schema_key);
         return true;
     }
@@ -393,11 +350,8 @@ static bool add_property_schema(
         return false;
     }
 
-    visibility = property_visibility(prop);
-
     array_init(&entry);
-    add_assoc_str(&entry, "php_name", zend_string_copy(php_name));
-    add_assoc_str(&entry, "json_name", field_name);
+    add_assoc_str(&entry, "field", field_name);
     add_assoc_zval(&entry, "description", &description);
     add_assoc_bool(&entry, "required", required);
     add_assoc_zval(&entry, "item_types", &item_types);
@@ -408,9 +362,6 @@ static bool add_property_schema(
     } else {
         add_assoc_string(&entry, "type", "mixed");
     }
-
-    add_assoc_string(&entry, "visibility", (char *) visibility);
-    add_assoc_bool(&entry, "has_default", property_has_default(ce, prop));
 
     /* Values are intentionally limited to public properties with standard storage.
      * This bypasses magic accessors and custom handlers entirely. */
@@ -444,19 +395,13 @@ static bool add_property_schema(
     return true;
 }
 
-PHP_FUNCTION(json_schema_for_object)
+static bool json_mapper_build_schema(zval *return_value, zend_object *object, zend_string *class_name)
 {
-    zend_object *object = NULL;
-    zend_string *class_name = NULL;
     zend_class_entry *ce;
     zend_property_info *prop;
     zend_string *key;
     zval properties;
     zend_class_entry *scope;
-
-    ZEND_PARSE_PARAMETERS_START(1, 1)
-        Z_PARAM_OBJ_OR_STR(object, class_name)
-    ZEND_PARSE_PARAMETERS_END();
 
     if (object) {
         ce = object->ce;
@@ -466,7 +411,7 @@ PHP_FUNCTION(json_schema_for_object)
             if (!EG(exception)) {
                 zend_throw_error(NULL, "Class \"%s\" not found", ZSTR_VAL(class_name));
             }
-            RETURN_THROWS();
+            return false;
         }
     }
 
@@ -484,16 +429,31 @@ PHP_FUNCTION(json_schema_for_object)
             }
 
             php_name = property_name(prop);
-            added = add_property_schema(&properties, ce, prop, php_name, object);
+            added = add_property_schema(&properties, prop, php_name, object);
             zend_string_release(php_name);
             if (!added) {
                 zval_ptr_dtor(&properties);
-                RETURN_THROWS();
+                return false;
             }
         } ZEND_HASH_FOREACH_END();
     }
 
     add_assoc_zval(return_value, "properties", &properties);
+    return true;
+}
+
+PHP_FUNCTION(json_schema_for_object)
+{
+    zend_object *object = NULL;
+    zend_string *class_name = NULL;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJ_OR_STR(object, class_name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (!json_mapper_build_schema(return_value, object, class_name)) {
+        RETURN_THROWS();
+    }
 }
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_schema, 0, 1, IS_ARRAY, 0)
@@ -505,9 +465,107 @@ static const zend_function_entry json_mapper_functions[] = {
     PHP_FE_END
 };
 
+static PHP_METHOD(JsonSchema, __construct)
+{
+    zend_object *object = NULL;
+    zend_string *class_name = NULL;
+    zval target;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJ_OR_STR(object, class_name)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (object) {
+        ZVAL_OBJ_COPY(&target, object);
+    } else {
+        ZVAL_STR_COPY(&target, class_name);
+    }
+
+    zend_update_property(
+        json_schema_ce,
+        Z_OBJ_P(ZEND_THIS),
+        "target",
+        sizeof("target") - 1,
+        &target
+    );
+    zval_ptr_dtor(&target);
+}
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_json_schema_construct, 0, 0, 1)
+    ZEND_ARG_TYPE_MASK(0, target, MAY_BE_OBJECT | MAY_BE_STRING, NULL)
+ZEND_END_ARG_INFO()
+
+static PHP_METHOD(JsonSchema, draw)
+{
+    zval rv;
+    zval *target;
+    zend_object *object = NULL;
+    zend_string *class_name = NULL;
+    bool built;
+
+    ZVAL_UNDEF(&rv);
+    target = zend_read_property(
+        json_schema_ce,
+        Z_OBJ_P(ZEND_THIS),
+        "target",
+        sizeof("target") - 1,
+        0,
+        &rv
+    );
+
+    if (Z_TYPE_P(target) == IS_OBJECT) {
+        object = Z_OBJ_P(target);
+    } else if (Z_TYPE_P(target) == IS_STRING) {
+        class_name = Z_STR_P(target);
+    } else {
+        zend_throw_error(NULL, "JsonMapper\\JsonSchema has no valid schema target");
+        if (Z_TYPE(rv) != IS_UNDEF) {
+            zval_ptr_dtor(&rv);
+        }
+        RETURN_THROWS();
+    }
+
+    built = json_mapper_build_schema(return_value, object, class_name);
+    if (Z_TYPE(rv) != IS_UNDEF) {
+        zval_ptr_dtor(&rv);
+    }
+
+    if (!built) {
+        RETURN_THROWS();
+    }
+}
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_schema_draw, 0, 0, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+static const zend_function_entry json_schema_methods[] = {
+    PHP_ME(JsonSchema, __construct, arginfo_json_schema_construct, ZEND_ACC_PUBLIC)
+    PHP_ME(JsonSchema, draw, arginfo_schema_draw, ZEND_ACC_PUBLIC)
+    PHP_FE_END
+};
+
 PHP_MINIT_FUNCTION(json_mapper)
 {
-    return json_mapper_register_attributes();
+    zend_class_entry ce;
+
+    if (json_mapper_register_attributes() == FAILURE) {
+        return FAILURE;
+    }
+
+    INIT_NS_CLASS_ENTRY(ce, "JsonMapper", "JsonSchema", json_schema_methods);
+    json_schema_ce = zend_register_internal_class(&ce);
+    if (!json_schema_ce) {
+        return FAILURE;
+    }
+    json_schema_ce->ce_flags |= ZEND_ACC_FINAL;
+    zend_declare_property_null(
+        json_schema_ce,
+        "target",
+        sizeof("target") - 1,
+        ZEND_ACC_PRIVATE
+    );
+
+    return SUCCESS;
 }
 
 PHP_MINFO_FUNCTION(json_mapper)

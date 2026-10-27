@@ -19,11 +19,11 @@ $object = new MagicAccessModel();
 $properties = json_schema_for_object($object)['properties'];
 var_dump($object->reads);
 var_dump($properties['visible']['value']);
-var_dump($properties['MagicAccessModel::$hidden']['visibility']);
-var_dump(array_key_exists('value', $properties['MagicAccessModel::$hidden']));
+var_dump($properties['hidden']['field']);
+var_dump(array_key_exists('value', $properties['hidden']));
 ?>
 --EXPECT--
 int(0)
 int(7)
-string(7) "private"
+string(6) "hidden"
 bool(false)

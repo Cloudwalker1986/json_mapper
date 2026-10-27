@@ -21,14 +21,12 @@ class VirtualPropertyModel {
 $object = new VirtualPropertyModel();
 $properties = json_schema_for_object($object)['properties'];
 var_dump($properties['computed']['type']);
-var_dump($properties['computed']['has_default']);
 var_dump(array_key_exists('value', $properties['computed']));
 var_dump(array_key_exists('initialized', $properties['computed']));
 var_dump($object->getterCalls);
 ?>
 --EXPECT--
 string(6) "string"
-bool(false)
 bool(false)
 bool(false)
 int(0)
