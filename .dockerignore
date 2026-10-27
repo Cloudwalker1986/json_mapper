@@ -1,0 +1,12 @@
+.git
+.github
+.libs
+modules
+*.lo
+*.la
+*.o
+Makefile
+configure
+autom4te.cache
+config.log
+config.status

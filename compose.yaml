@@ -1,0 +1,13 @@
+services:
+  php:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.3}
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    command: sleep infinity
